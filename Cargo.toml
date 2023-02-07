@@ -10,3 +10,5 @@ edition = "2021"
 version = "0.2"
 default-features = false
 # features = ["libm"]
+
+num = "0.4"
