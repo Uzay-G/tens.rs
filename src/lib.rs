@@ -33,7 +33,7 @@ impl<'a, T: Num + Copy + Default> Tensor<'a, T> {
             r_parent: None
         }
     }
-    fn new_parented(data: Vec<T>, shape: &Vec<usize>, op: TensOp, l_parent: Option<&'a Tensor<'a, T>>, r_parent: Option<&'a Tensor<'a, T>> ) -> Tensor<'a, T> {
+    fn new_parented<'b>(data: Vec<T>, shape: &Vec<usize>, op: TensOp, l_parent: Option<&'b Tensor<'b, T>>, r_parent: Option<&'b Tensor<'b, T>> ) -> Tensor<'b, T> {
         let mut stride = vec![1];
         for i in 0..shape.len() - 1 {
             stride.push(stride[i] * shape[shape.len() - i - 1]);
@@ -58,9 +58,9 @@ macro_rules! broadcast {
         // I've been thinking about how to implement broadcasting in a nice abstract way, that generalizes
         // across binary operators
         // rust is :heart:
-        impl<'a, T: Num + Copy + Default + AddAssign>$b_trait for Tensor<'a, T> {
+        impl<'a, T: Num + Copy + Default + AddAssign>$b_trait<&'a Tensor<'a, T>> for &'a Tensor<'a, T> {
             type Output = Tensor<'a, T>;
-            fn $fn_name(self, rhs: Tensor<T>) -> Tensor<'a, T> {
+            fn $fn_name(self, rhs: &'a Tensor<'a, T>) -> Tensor<T> {
                 let mut res: Vec<T> = vec![];
                 let mut grad: Vec<T> = vec![];
                 let (smallest, largest) = if self.data.len() < rhs.data.len() {
@@ -74,7 +74,7 @@ macro_rules! broadcast {
                 for i in 0..largest.data.len() {
                     res.push(largest.data[i].$fn_name(smallest.data[i % stride]));
                 }
-                return Tensor::new(res, &largest.shape);
+                return Tensor::new_parented(res, &self.shape, TensOp::$b_trait, Some(self), Some(rhs));
             }
         }
 
@@ -170,7 +170,7 @@ mod tests {
         let shape = vec![2, 3];
         let tensor1 = Tensor::new(data1, &shape);
         let tensor2 = Tensor::new(data2, &shape);
-        let tensor3 = tensor1 + tensor2;
+        let tensor3 = &tensor1 + &tensor2;
         assert_eq!(tensor3.data, vec![2.0, 4.0, 6.0, 8.0, 10.0, 12.0]);
     }
 
@@ -190,7 +190,7 @@ mod tests {
         let shape = vec![2, 3];
         let tensor1 = Tensor::new(data1, &shape);
         let tensor2 = Tensor::new(data2, &shape);
-        let tensor3 = tensor1 * tensor2;
+        let tensor3 = &tensor1 * &tensor2;
         assert_eq!(tensor3.data, vec![1.0, 4.0, 9.0, 16.0, 25.0, 36.0]);
     }
 
@@ -201,7 +201,7 @@ mod tests {
         let shape = vec![2, 3];
         let tensor1 = Tensor::new(data1, &shape);
         let tensor2 = Tensor::new(data2, &shape);
-        let tensor3 = tensor1 / tensor2;
+        let tensor3 = &tensor1 / &tensor2;
         assert_eq!(tensor3.data, vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
     }
 
@@ -214,7 +214,7 @@ mod tests {
         let shape2 = vec![3];
         let tensor1 = Tensor::new(data1, &shape1);
         let tensor2 = Tensor::new(data2, &shape2);
-        let tensor3 = tensor1 * tensor2;
+        let tensor3 = &tensor1 * &tensor2;
         println!("{:?}", tensor3.data);
         assert_eq!(tensor3.data, vec![1.0, 4.0, 3.0, 8.0, 5.0, 12.0, 7.0, 16.0, 9.0, 20.0, 11.0, 24.0]);
     }
@@ -228,7 +228,7 @@ mod tests {
         let shape2 = vec![3];
         let tensor1 = Tensor::new(data1, &shape1);
         let tensor2 = Tensor::new(data2, &shape2);
-        let tensor3 = tensor1 * tensor2;
+        let tensor3 = &tensor1 * &tensor2;
         assert_eq!(tensor3.data, vec![1.0, 4.0, 9.0, 4.0, 10.0, 18.0]);
     }
 
