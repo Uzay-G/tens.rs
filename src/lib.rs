@@ -1,4 +1,4 @@
-use std::ops::{Div, Mul, Add, Sub, AddAssign};
+use std::ops::{Div, Mul, Add, Sub, AddAssign, Neg};
 use crate::ops::*; 
 use num_traits::Num;
 
@@ -11,11 +11,11 @@ struct Tensor<'a, T> {
     shape: Vec<usize>,
     stride: Vec<usize>,
     op: Option<TensOp>,
-    l_parent: Option<&'a Tensor<'a, T>>,
-    r_parent: Option<&'a Tensor<'a, T>>
+    l_parent: Option<&'a mut Tensor<'a, T>>,
+    r_parent: Option<&'a mut Tensor<'a, T>>
 }
 
-impl<'a, T: Num + Copy + Default> Tensor<'a, T> {
+impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
     fn new(data: Vec<T>, shape: &Vec<usize>) -> Tensor<'a, T> {
         let mut stride = vec![1];
         for i in 0..shape.len() - 1 {
@@ -33,7 +33,7 @@ impl<'a, T: Num + Copy + Default> Tensor<'a, T> {
             r_parent: None
         }
     }
-    fn new_parented<'b>(data: Vec<T>, shape: &Vec<usize>, op: TensOp, l_parent: Option<&'b Tensor<'b, T>>, r_parent: Option<&'b Tensor<'b, T>> ) -> Tensor<'b, T> {
+    fn new_parented<'b>(data: Vec<T>, shape: &Vec<usize>, op: TensOp, l_parent: Option<&'b mut Tensor<'b, T>>, r_parent: Option<&'b mut Tensor<'b, T>> ) -> Tensor<'b, T> {
         let mut stride = vec![1];
         for i in 0..shape.len() - 1 {
             stride.push(stride[i] * shape[shape.len() - i - 1]);
@@ -50,6 +50,64 @@ impl<'a, T: Num + Copy + Default> Tensor<'a, T> {
             r_parent: r_parent
         }
     }
+    fn backward(&mut self, deriv: Tensor<T>) where <T as Neg>::Output: Mul<T> {
+
+        self.grad = deriv.data;
+        match (self.l_parent.as_mut(), self.r_parent.as_mut()) {
+            (Some(lhs), Some(rhs)) => {
+                match self.op.as_ref().unwrap() {
+                    TensOp::Add => {
+                        lhs.backward(Tensor::new(self.grad.clone(), &self.shape));
+                        rhs.backward(Tensor::new(self.grad.clone(), &self.shape));
+                    }
+                    TensOp::Mul => {
+                        let mut l_grad = vec![T::zero(); lhs.data.len()];
+                        let mut r_grad = vec![T::zero(); rhs.data.len()];
+                        for i in 0..self.data.len() {
+                            l_grad[i] = self.grad[i] * rhs.data[i];
+                            r_grad[i] = self.grad[i] * lhs.data[i];
+                        }
+                        lhs.backward(Tensor::new(l_grad, &lhs.shape));
+                        rhs.backward(Tensor::new(r_grad, &rhs.shape));
+                    }
+                    TensOp::Div => {
+                        let mut l_grad = vec![T::zero(); lhs.data.len()];
+                        let mut r_grad = vec![T::zero(); rhs.data.len()];
+                        for i in 0..self.data.len() {
+                            l_grad[i] = self.grad[i] / rhs.data[i];
+                            r_grad[i] = -self.grad[i] * lhs.data[i] / (rhs.data[i] * rhs.data[i]);
+                        }
+                        lhs.backward(Tensor::new(l_grad, &lhs.shape));
+                        rhs.backward(Tensor::new(r_grad, &rhs.shape));
+                    }
+                    TensOp::Sub => {
+                        lhs.backward(Tensor::new(self.grad.clone(), &self.shape));
+                        let mut r_grad = vec![T::zero(); rhs.data.len()];
+                        for i in 0..self.data.len() {
+                            r_grad[i] = -self.grad[i];
+                        }
+                        rhs.backward(Tensor::new(r_grad, &rhs.shape));
+                    }
+                }
+            }
+            (None, _) => {}
+            (_, None) => {}
+        }
+    }
+    fn ones(shape: &Vec<usize>) -> Tensor<'a, T> {
+        let mut data = vec![Default::default(); shape.iter().product()];
+        for i in 0..data.len() {
+            data[i] = T::one();
+        }
+        Tensor::new(data, shape)
+    }
+    fn zeros(shape: &Vec<usize>) -> Tensor<'a, T> {
+        let mut data = vec![Default::default(); shape.iter().product()];
+        for i in 0..data.len() {
+            data[i] = T::zero();
+        }
+        Tensor::new(data, shape)
+    }
 }
 // rust macros are amazing
 // now let's actually implement broadcasting properly
@@ -58,9 +116,9 @@ macro_rules! broadcast {
         // I've been thinking about how to implement broadcasting in a nice abstract way, that generalizes
         // across binary operators
         // rust is :heart:
-        impl<'a, T: Num + Copy + Default + AddAssign>$b_trait<&'a Tensor<'a, T>> for &'a Tensor<'a, T> {
+        impl<'a, T: Neg<Output = T> + Num + Copy + Default + AddAssign + std::ops::Neg>$b_trait<&'a mut Tensor<'a, T>> for &'a mut Tensor<'a, T> {
             type Output = Tensor<'a, T>;
-            fn $fn_name(self, rhs: &'a Tensor<'a, T>) -> Tensor<T> {
+            fn $fn_name(self, rhs: &'a mut Tensor<'a, T>) -> Tensor<T> {
                 let mut res: Vec<T> = vec![];
                 let mut grad: Vec<T> = vec![];
                 let (smallest, largest) = if self.data.len() < rhs.data.len() {
@@ -74,11 +132,12 @@ macro_rules! broadcast {
                 for i in 0..largest.data.len() {
                     res.push(largest.data[i].$fn_name(smallest.data[i % stride]));
                 }
-                return Tensor::new_parented(res, &self.shape, TensOp::$b_trait, Some(self), Some(rhs));
+                //return Tensor::new(res, &largest.shape);
+                return Tensor::new_parented(res, &(largest.shape.clone()), TensOp::$b_trait, Some(smallest), Some(largest));
             }
         }
 
-        impl<'a, T: Num + Copy + Default + AddAssign> $b_trait<T> for Tensor<'a, T> {
+        impl<'a, T: Neg<Output = T> + Num + Copy + Default + AddAssign + std::ops::Neg> $b_trait<T> for Tensor<'a, T> {
             type Output = Tensor<'a, T>;
             fn $fn_name(self, rhs: T) -> Tensor<'a, T> {
                 let mut res: Vec<T> = vec![];
@@ -98,7 +157,7 @@ macro_rules! broadcast {
 // can't easily represent numerical types, should check out num
 macro_rules! implement_reduce {
     ($fn_name:ident, $dim_fn:ident, $reduc_output:ident) => {
-        impl<'a, T: Num + Copy + Default + AddAssign> Tensor<'a, T> where f64: From<T>, T: Div<Output = T> {
+        impl<'a, T: Num + Copy + Default + AddAssign + std::ops::Neg> Tensor<'a, T> where f64: From<T>, T: Div<Output = T>, T: Neg<Output = T> {
             fn $fn_name(self) -> $reduc_output {
                 return $fn_name(&self.data);
             }
@@ -147,7 +206,7 @@ mod tests {
     fn test_tensor_creation_2d() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let shape = vec![2, 3];
-        let tensor = Tensor::new(data, &shape);
+        let mut tensor = Tensor::new(data, &shape);
         assert_eq!(tensor.data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         assert_eq!(tensor.shape, vec![2, 3]);
         assert_eq!(tensor.stride, vec![3, 1]);
@@ -157,7 +216,7 @@ mod tests {
     fn test_tensor_creation_3d() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let shape = vec![2, 2, 2];
-        let tensor = Tensor::new(data, &shape);
+        let mut tensor = Tensor::new(data, &shape);
         assert_eq!(tensor.data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
         assert_eq!(tensor.shape, vec![2, 2, 2]);
         assert_eq!(tensor.stride, vec![4, 2, 1]);
@@ -168,9 +227,9 @@ mod tests {
         let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let data2 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let shape = vec![2, 3];
-        let tensor1 = Tensor::new(data1, &shape);
-        let tensor2 = Tensor::new(data2, &shape);
-        let tensor3 = &tensor1 + &tensor2;
+        let mut tensor1 = Tensor::new(data1, &shape);
+        let mut tensor2 = Tensor::new(data2, &shape);
+        let mut tensor3 = &mut tensor1 + &mut tensor2;
         assert_eq!(tensor3.data, vec![2.0, 4.0, 6.0, 8.0, 10.0, 12.0]);
     }
 
@@ -178,8 +237,8 @@ mod tests {
     fn test_add_scalar() {
         let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let shape = vec![2, 3];
-        let tensor1 = Tensor::new(data1, &shape);
-        let tensor2 = tensor1 + 1.0;
+        let mut tensor1 = Tensor::new(data1, &shape);
+        let mut tensor2 = tensor1 + 1.0;
         assert_eq!(tensor2.data, vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
     }
 
@@ -188,9 +247,9 @@ mod tests {
         let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let data2 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let shape = vec![2, 3];
-        let tensor1 = Tensor::new(data1, &shape);
-        let tensor2 = Tensor::new(data2, &shape);
-        let tensor3 = &tensor1 * &tensor2;
+        let mut tensor1 = Tensor::new(data1, &shape);
+        let mut tensor2 = Tensor::new(data2, &shape);
+        let mut tensor3 = &mut tensor1 * &mut tensor2;
         assert_eq!(tensor3.data, vec![1.0, 4.0, 9.0, 16.0, 25.0, 36.0]);
     }
 
@@ -199,9 +258,9 @@ mod tests {
         let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let data2 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let shape = vec![2, 3];
-        let tensor1 = Tensor::new(data1, &shape);
-        let tensor2 = Tensor::new(data2, &shape);
-        let tensor3 = &tensor1 / &tensor2;
+        let mut tensor1 = Tensor::new(data1, &shape);
+        let mut tensor2 = Tensor::new(data2, &shape);
+        let mut tensor3 = &mut tensor1 / &mut tensor2;
         assert_eq!(tensor3.data, vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
     }
 
@@ -212,9 +271,9 @@ mod tests {
         let data2 = vec![1.0, 2.0];
         let shape1 = vec![2, 3, 2];
         let shape2 = vec![3];
-        let tensor1 = Tensor::new(data1, &shape1);
-        let tensor2 = Tensor::new(data2, &shape2);
-        let tensor3 = &tensor1 * &tensor2;
+        let mut tensor1 = Tensor::new(data1, &shape1);
+        let mut tensor2 = Tensor::new(data2, &shape2);
+        let mut tensor3 = &mut tensor1 * &mut tensor2;
         println!("{:?}", tensor3.data);
         assert_eq!(tensor3.data, vec![1.0, 4.0, 3.0, 8.0, 5.0, 12.0, 7.0, 16.0, 9.0, 20.0, 11.0, 24.0]);
     }
@@ -226,9 +285,9 @@ mod tests {
         let data2 = vec![1.0, 2.0, 3.0];
         let shape1 = vec![2, 3];
         let shape2 = vec![3];
-        let tensor1 = Tensor::new(data1, &shape1);
-        let tensor2 = Tensor::new(data2, &shape2);
-        let tensor3 = &tensor1 * &tensor2;
+        let mut tensor1 = Tensor::new(data1, &shape1);
+        let mut tensor2 = Tensor::new(data2, &shape2);
+        let mut tensor3 = &mut tensor1 * &mut tensor2;
         assert_eq!(tensor3.data, vec![1.0, 4.0, 9.0, 4.0, 10.0, 18.0]);
     }
 
@@ -236,7 +295,7 @@ mod tests {
     fn test_tensor_sum() {
         let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let shape1 = vec![2, 3];
-        let tensor1 = Tensor::new(data1, &shape1);
+        let mut tensor1 = Tensor::new(data1, &shape1);
         let sum = tensor1.sum();
         assert_eq!(sum, 21.0); // ugh
 
@@ -246,7 +305,7 @@ mod tests {
     fn test_tensor_mean() {
         let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let shape1 = vec![2, 3];
-        let tensor1 = Tensor::new(data1, &shape1);
+        let mut tensor1 = Tensor::new(data1, &shape1);
         let mean = tensor1.mean();
         assert_eq!(mean, 3.5); // ugh
     }
@@ -255,7 +314,7 @@ mod tests {
     fn test_tensor_sum_dim() {
         let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let shape1 = vec![2, 3];
-        let tensor1 = Tensor::new(data1, &shape1);
+        let mut tensor1 = Tensor::new(data1, &shape1);
         let sum = tensor1.sum_dim(1);
         assert_eq!(sum.data, vec![6.0, 15.0]);
     }
@@ -264,11 +323,10 @@ mod tests {
     fn test_tensor_mean_dim() {
         let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let shape1 = vec![2, 3];
-        let tensor1 = Tensor::new(data1, &shape1);
+        let mut tensor1 = Tensor::new(data1, &shape1);
         let sum = tensor1.mean_dim(1);
         assert_eq!(sum.data, vec![2.0, 5.0]);
     }
-
 }
 
 
