@@ -1,4 +1,4 @@
-use std::ops::{Div, Mul, Add, Sub, AddAssign, Neg};
+use std::ops::{Div, Mul, Add, Sub, AddAssign, Neg, Index};
 use crate::ops::*; 
 use num_traits::Num;
 use std::cell::RefCell;
@@ -53,7 +53,6 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
         }
     }
     fn backward(&self, deriv: Option<Tensor<T>>) where <T as Neg>::Output: Mul<T> {
-
         let grad = deriv.unwrap_or(Tensor::ones(&self.shape)).data;
         *self.grad.borrow_mut() = grad.clone();
         match (self.l_parent, self.r_parent) {
@@ -98,7 +97,20 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
             (_, None) => {}
         }
     }
-    fn matmul(&self, &rhs: &Tensor<T>) -> Tensor<T> where T: Mul<T, Output = T> + Add<T, Output = T> + Copy {
+    fn transpose(&self) -> Tensor<T> {
+        let mut new_shape = self.shape.clone();
+        new_shape.swap(0, 1);
+        let mut new_data = vec![T::zero(); self.data.len()];
+        for i in 0..self.data.len() {
+            let mut idx = 0;
+            for j in 0..self.shape.len() {
+            }
+            new_data[idx] = self.data[i];
+        }
+        Tensor::new(new_data, &new_shape)
+    }
+    /*
+    fn matmul(&self, rhs: &Tensor<T>) -> Tensor<T> where T: Mul<T, Output = T> + Add<T, Output = T> + Copy {
         let mut data = vec![T::zero(); self.shape[0] * rhs.shape[1]];
         for i in 0..self.shape[0] {
             for j in 0..rhs.shape[1] {
@@ -109,6 +121,7 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
         }
         Tensor::new_parented(data, &vec![self.shape[0], rhs.shape[1]], TensOp::MatMul, Some(self), Some(rhs))
     }
+    */
     fn ones(shape: &Vec<usize>) -> Tensor<'a, T> {
         let mut data = vec![Default::default(); shape.iter().product()];
         for i in 0..data.len() {
@@ -124,6 +137,19 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
         Tensor::new(data, shape)
     }
 }
+
+impl<T> Index<Vec<usize>> for Tensor<'_, T> {
+    type Output = T;
+    fn index(&self, idx: Vec<usize>) -> &T {
+        if idx.len() < self.stride.len() { panic!("Indexing error"); }
+        let mut index = 0;
+        for i in 0..self.shape.len() {
+            index += self.stride[i] * idx[i];
+        }
+        return &self.data[index];
+    }
+}
+
 // rust macros are amazing
 // now let's actually implement broadcasting properly
 macro_rules! broadcast {
@@ -353,6 +379,14 @@ mod tests {
         tensor3.backward(None);
         assert_eq!(*tensor1.grad.borrow(), vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
         assert_eq!(*tensor2.grad.borrow(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_basic_index() {
+        let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let shape1 = vec![2, 3];
+        let tensor1 = Tensor::new(data1, &shape1);
+        assert_eq!(tensor1[vec![1, 2]], 6.0);
     }
 }
 
