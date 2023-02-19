@@ -2,13 +2,15 @@ use std::ops::{Div, Mul, Add, Sub, AddAssign, Neg, Index};
 use crate::ops::*; 
 use num_traits::Num;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 mod ops;
 
 // we have our tensor type
+#[derive(Clone)]
 struct Tensor<'a, T> {
     data: Vec<T>,
-    grad: RefCell<Vec<T>>,
+    grad: RefCell<Option<Rc<Tensor<'a, T>>>>,
     shape: Vec<usize>,
     stride: Vec<usize>,
     op: Option<TensOp>,
@@ -28,8 +30,7 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
             data: data,
             shape: shape.clone(),
             stride: stride,
-            grad: RefCell::new(vec![Default::default(); len]),
-            //grad: vec![Default::default(); len],
+            grad: RefCell::new(None),
             op: None,
             l_parent: None,
             r_parent: None
@@ -46,28 +47,28 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
             data: data,
             shape: shape.clone(),
             stride: stride,
-            grad: RefCell::new(vec![Default::default(); len]),
+            grad: RefCell::new(None),
             op: Some(op),
             l_parent: l_parent,
             r_parent: r_parent
         }
     }
-    fn backward(&self, deriv: Option<Tensor<T>>) where <T as Neg>::Output: Mul<T> {
-        let grad = deriv.unwrap_or(Tensor::ones(&self.shape)).data;
-        *self.grad.borrow_mut() = grad.clone();
+    fn backward(&self, deriv: Option<Tensor<'a, T>>) where <T as Neg>::Output: Mul<T> {
+        let grad = deriv.unwrap_or(Tensor::ones(&self.shape));
+        *self.grad.borrow_mut() = Some(Rc::new(grad.clone()));
         match (self.l_parent, self.r_parent) {
             (Some(lhs), Some(rhs)) => {
                 match self.op.as_ref().unwrap() {
                     TensOp::Add => {
-                        lhs.backward(Some(Tensor::ones(&self.shape)));
-                        rhs.backward(Some(Tensor::ones(&self.shape)));
+                        lhs.backward(Some(Tensor::ones(&lhs.shape)));
+                        rhs.backward(Some(Tensor::ones(&rhs.shape)));
                     }
                     TensOp::Mul => {
                         let mut l_grad = vec![T::zero(); lhs.data.len()];
                         let mut r_grad = vec![T::zero(); rhs.data.len()];
                         for i in 0..self.data.len() {
-                            l_grad[i] = grad[i] * rhs.data[i];
-                            r_grad[i] = grad[i] * lhs.data[i];
+                            l_grad[i] = grad.data[i] * rhs.data[i];
+                            r_grad[i] = grad.data[i] * lhs.data[i];
                         }
                         lhs.backward(Some(Tensor::new(l_grad, &lhs.shape)));
                         rhs.backward(Some(Tensor::new(r_grad, &rhs.shape)));
@@ -76,20 +77,15 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
                         let mut l_grad = vec![T::zero(); lhs.data.len()];
                         let mut r_grad = vec![T::zero(); rhs.data.len()];
                         for i in 0..self.data.len() {
-                            l_grad[i] = grad[i] / rhs.data[i];
-                            r_grad[i] = -grad[i] * lhs.data[i] / (rhs.data[i] * rhs.data[i]);
+                            l_grad[i] = grad.data[i] / rhs.data[i];
+                            r_grad[i] = -grad.data[i] * lhs.data[i] / (rhs.data[i] * rhs.data[i]);
                         }
                         lhs.backward(Some(Tensor::new(l_grad, &lhs.shape)));
                         rhs.backward(Some(Tensor::new(r_grad, &rhs.shape)));
                     }
                     TensOp::Sub => {
-                        lhs.backward(Some(Tensor::new(grad.clone(), &self.shape)));
-
-                        let mut r_grad = vec![T::zero(); rhs.data.len()];
-                        for i in 0..self.data.len() {
-                            r_grad[i] = -grad[i];
-                        }
-                        rhs.backward(Some(Tensor::new(r_grad, &rhs.shape)));
+                        lhs.backward(Some(Tensor::ones(&lhs.shape)));
+                        rhs.backward(Some(Tensor::ones(&rhs.shape)));
                     }
                 }
             }
@@ -161,7 +157,6 @@ macro_rules! broadcast {
             type Output = Tensor<'a, T>;
             fn $fn_name(self, rhs: &'a Tensor<'a, T>) -> Tensor<T> {
                 let mut res: Vec<T> = vec![];
-                let mut grad: Vec<T> = vec![];
                 let (smallest, largest) = if self.data.len() < rhs.data.len() {
                     (self, rhs)
                 } else {
@@ -377,8 +372,8 @@ mod tests {
         let tensor2 = &tensor1 + 1.0;
         let tensor3 = &tensor1 * &tensor2;
         tensor3.backward(None);
-        assert_eq!(*tensor1.grad.borrow(), vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
-        assert_eq!(*tensor2.grad.borrow(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(*tensor1.grad.borrow_mut().as_mut().unwrap().data, vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+        assert_eq!(*tensor2.grad.borrow_mut().as_mut().unwrap().data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     }
 
     #[test]
