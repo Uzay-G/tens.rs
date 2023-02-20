@@ -1,7 +1,7 @@
 use std::ops::{AddAssign};
 use num_traits::Num;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum TensOp {
     Add,
     Mul,

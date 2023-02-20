@@ -12,7 +12,7 @@ enum TensErrors {
 }
 
 // we have our tensor type
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Tensor<'a, T> {
     data: Vec<T>,
     grad: RefCell<Option<Rc<Tensor<'a, T>>>>,
@@ -23,7 +23,7 @@ struct Tensor<'a, T> {
     r_parent: Option<&'a Tensor<'a, T>>
 }
 
-impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
+impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T> + std::fmt::Display> Tensor<'a, T> {
     fn new(data: Vec<T>, shape: &Vec<usize>) -> Tensor<'a, T> {
         let mut stride = vec![1];
         for i in 0..shape.len() - 1 {
@@ -63,8 +63,8 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
             (Some(lhs), Some(rhs)) => {
                 match self.op.as_ref().unwrap() {
                     TensOp::Add => {
-                        lhs.backward(Some(Tensor::ones(&lhs.shape)));
-                        rhs.backward(Some(Tensor::ones(&rhs.shape)));
+                        lhs.backward(Some(grad.clone()));
+                        rhs.backward(Some(grad.clone()));
                     }
                     TensOp::Mul => {
                         let mut l_grad = vec![T::zero(); lhs.data.len()];
@@ -73,6 +73,7 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
                             l_grad[i] = grad.data[i] * rhs.data[i];
                             r_grad[i] = grad.data[i] * lhs.data[i];
                         }
+                        // use tensor ops to make this cleaner
                         lhs.backward(Some(Tensor::new(l_grad, &lhs.shape)));
                         rhs.backward(Some(Tensor::new(r_grad, &rhs.shape)));
                     }
@@ -80,6 +81,7 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
                         let mut l_grad = vec![T::zero(); lhs.data.len()];
                         let mut r_grad = vec![T::zero(); rhs.data.len()];
                         for i in 0..self.data.len() {
+                            println!("rhs.data[i]: {}", rhs.data[i]);
                             l_grad[i] = grad.data[i] / rhs.data[i];
                             r_grad[i] = -grad.data[i] * lhs.data[i] / (rhs.data[i] * rhs.data[i]);
                         }
@@ -141,6 +143,12 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
     }
 }
 
+impl<T> PartialEq for Tensor<'_, T> where T: PartialEq {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data && self.shape == other.shape
+    }
+}
+
 impl<T> Index<Vec<usize>> for Tensor<'_, T> {
     type Output = T;
     fn index(&self, idx: Vec<usize>) -> &T {
@@ -160,27 +168,38 @@ macro_rules! broadcast {
         // I've been thinking about how to implement broadcasting in a nice abstract way, that generalizes
         // across binary operators
         // rust is :heart:
-        impl<'a, T: Neg<Output = T> + Num + Copy + Default + AddAssign + std::ops::Neg>$b_trait<&'a Tensor<'a, T>> for &'a Tensor<'a, T> {
+        impl<'a, T: Neg<Output = T> + std::fmt::Display+ Num + Copy + Default + AddAssign + std::ops::Neg>$b_trait<&'a Tensor<'a, T>> for &'a Tensor<'a, T> {
             type Output = Tensor<'a, T>;
             fn $fn_name(self, rhs: &'a Tensor<'a, T>) -> Tensor<T> {
                 let mut res: Vec<T> = vec![];
-                let (smallest, largest) = if self.data.len() < rhs.data.len() {
-                    (self, rhs)
+                let (smallest, largest, inverted) = if self.data.len() < rhs.data.len() {
+                    (self, rhs, false)
                 } else {
-                    (rhs, self)
+                    (rhs, self, true)
                 };
                 //let mut i = smallest.shape.len() - 1;
                 //while smallest.shape[i] == largest.shape[i] && i >= 1 { i -= 1; }
                 let stride = smallest.data.len();
                 for i in 0..largest.data.len() {
-                    res.push(largest.data[i].$fn_name(smallest.data[i % stride]));
+                    if (inverted)
+                    {
+                        res.push(largest.data[i].$fn_name(smallest.data[i % stride]));
+                    } else {
+                        res.push(smallest.data[i % stride].$fn_name(largest.data[i]));
+                    }
                 }
                 //return Tensor::new(res, &largest.shape);
-                return Tensor::new_parented(res, &(largest.shape.clone()), TensOp::$b_trait, Some(smallest), Some(largest));
+                // TODO: make inversion cleaner here
+                if (inverted) {
+                    return Tensor::new_parented(res, &(largest.shape.clone()), TensOp::$b_trait, Some(largest), Some(smallest));
+                }
+                else {
+                    return Tensor::new_parented(res, &(largest.shape.clone()), TensOp::$b_trait, Some(smallest), Some(largest));
+                }
             }
         }
 
-        impl<'a, T: Neg<Output = T> + Num + Copy + Default + AddAssign + std::ops::Neg> $b_trait<T> for &'a Tensor<'a, T> {
+        impl<'a, T: Neg<Output = T> + std::fmt::Display + Num + Copy + Default + AddAssign + std::ops::Neg> $b_trait<T> for &'a Tensor<'a, T> {
             type Output = Tensor<'a, T>;
             fn $fn_name(self, rhs: T) -> Tensor<'a, T> {
                 let mut res: Vec<T> = vec![];
@@ -200,7 +219,7 @@ macro_rules! broadcast {
 // can't easily represent numerical types, should check out num
 macro_rules! implement_reduce {
     ($fn_name:ident, $dim_fn:ident, $reduc_output:ident) => {
-        impl<'a, T: Num + Copy + Default + AddAssign + std::ops::Neg> Tensor<'a, T> where f64: From<T>, T: Div<Output = T>, T: Neg<Output = T> {
+        impl<'a, T: Num + Copy + Default + AddAssign + std::ops::Neg> Tensor<'a, T> where f64: From<T>, T: Div<Output = T>, T: Neg<Output = T>, T: std::fmt::Display {
             fn $fn_name(self) -> $reduc_output {
                 return $fn_name(&self.data);
             }
@@ -376,12 +395,19 @@ mod tests {
         let shape1 = vec![2, 3];
         let tensor1 = Tensor::new(data1, &shape1);
         let tensor2 = &tensor1 + 1.0;
+        println!("{:?}", tensor2.data);
         let tensor3 = &tensor1 * &tensor2;
+        let tensor4 = &tensor3 / &tensor2;
+        assert_eq!(tensor3.data, vec![2.0, 6.0, 12.0, 20.0, 30.0, 42.0]);
+        println!("{:?}", tensor4.r_parent.unwrap().data);
         tensor3.backward(None);
         // is there any better way to do this?
         assert_eq!(tensor1.gradient().unwrap().data, vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
         assert_eq!(tensor2.gradient().unwrap().data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        tensor4.backward(None);
+        assert_eq!(tensor3.gradient().unwrap().data, (&Tensor::new(vec![1.0], &vec![1]) / &tensor2).data);
     }
+
 
     #[test]
     fn test_basic_index() {
