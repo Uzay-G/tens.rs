@@ -6,6 +6,11 @@ use std::rc::Rc;
 
 mod ops;
 
+#[derive(Debug)]
+enum TensErrors {
+    NoGrad
+}
+
 // we have our tensor type
 #[derive(Clone)]
 struct Tensor<'a, T> {
@@ -25,7 +30,6 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
             stride.push(stride[i] * shape[shape.len() - i - 1]);
         }
         stride.reverse();
-        let len = data.len();
         Tensor {
             data: data,
             shape: shape.clone(),
@@ -42,7 +46,6 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
             stride.push(stride[i] * shape[shape.len() - i - 1]);
         }
         stride.reverse();
-        let len = data.len();
         Tensor {
             data: data,
             shape: shape.clone(),
@@ -93,19 +96,19 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
             (_, None) => {}
         }
     }
+    /*
     fn transpose(&self) -> Tensor<T> {
         let mut new_shape = self.shape.clone();
         new_shape.swap(0, 1);
         let mut new_data = vec![T::zero(); self.data.len()];
+        let idx = 0;
         for i in 0..self.data.len() {
-            let mut idx = 0;
             for j in 0..self.shape.len() {
             }
             new_data[idx] = self.data[i];
         }
         Tensor::new(new_data, &new_shape)
     }
-    /*
     fn matmul(&self, rhs: &Tensor<T>) -> Tensor<T> where T: Mul<T, Output = T> + Add<T, Output = T> + Copy {
         let mut data = vec![T::zero(); self.shape[0] * rhs.shape[1]];
         for i in 0..self.shape[0] {
@@ -131,6 +134,10 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T>> Tensor<'a, T> {
             data[i] = T::zero();
         }
         Tensor::new(data, shape)
+    }
+    fn gradient(&self) -> Result<Rc<Tensor<'a, T>>, TensErrors> {
+        // need help here, this probably isn't super clean
+        return Ok(self.grad.borrow_mut().as_mut().ok_or(TensErrors::NoGrad)?.clone());
     }
 }
 
@@ -229,7 +236,6 @@ broadcast!(Add, add);
 broadcast!(Mul, mul);
 broadcast!(Div, div);
 broadcast!(Sub, sub);
-
 
 implement_reduce!{sum, sum_dim, T}
 implement_reduce!{mean, mean_dim, f64}
@@ -372,8 +378,9 @@ mod tests {
         let tensor2 = &tensor1 + 1.0;
         let tensor3 = &tensor1 * &tensor2;
         tensor3.backward(None);
-        assert_eq!(*tensor1.grad.borrow_mut().as_mut().unwrap().data, vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
-        assert_eq!(*tensor2.grad.borrow_mut().as_mut().unwrap().data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        // is there any better way to do this?
+        assert_eq!(tensor1.gradient().unwrap().data, vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+        assert_eq!(tensor2.gradient().unwrap().data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     }
 
     #[test]
