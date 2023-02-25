@@ -56,6 +56,21 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T> + std::fmt::Display> Te
             r_parent: r_parent
         }
     }
+
+    fn transpose(&self) -> Tensor<'a, T> {
+        let mut new_shape = self.shape.clone();
+        let mut new_stride = self.stride.clone();
+        new_shape.reverse();
+        new_stride.reverse();
+        let mut new_data = vec![Default::default(); self.data.len()];
+        for i in 0..self.shape[0] {
+            for j in 0..self.shape[1] {
+                println!("{} {}, {}", i, j, self.stride[0]);
+                new_data[j * self.shape[0] + i] = self.data[i * self.shape[1] + j];
+            }
+        }
+        Tensor::new(new_data, &new_shape)
+    }
     fn backward(&self, deriv: Option<Tensor<'a, T>>) where <T as Neg>::Output: Mul<T> {
         let grad = deriv.unwrap_or(Tensor::ones(&self.shape));
         *self.grad.borrow_mut() = Some(Rc::new(grad.clone()));
@@ -92,6 +107,9 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T> + std::fmt::Display> Te
                         lhs.backward(Some(Tensor::ones(&lhs.shape)));
                         rhs.backward(Some(Tensor::ones(&rhs.shape)));
                     }
+                    TensOp::MatMul => {
+                        //
+                    }
                 }
             }
             (None, _) => {}
@@ -111,7 +129,8 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T> + std::fmt::Display> Te
         }
         Tensor::new(new_data, &new_shape)
     }
-    fn matmul(&self, rhs: &Tensor<T>) -> Tensor<T> where T: Mul<T, Output = T> + Add<T, Output = T> + Copy {
+    */
+    fn matmul(&'a self, rhs: &'a Tensor<'a, T>) -> Tensor<T> where T: Mul<T, Output = T> + Add<T, Output = T> + Copy {
         let mut data = vec![T::zero(); self.shape[0] * rhs.shape[1]];
         for i in 0..self.shape[0] {
             for j in 0..rhs.shape[1] {
@@ -122,7 +141,7 @@ impl<'a, T: Num + Copy + Default + Neg + Neg<Output = T> + std::fmt::Display> Te
         }
         Tensor::new_parented(data, &vec![self.shape[0], rhs.shape[1]], TensOp::MatMul, Some(self), Some(rhs))
     }
-    */
+
     fn ones(shape: &Vec<usize>) -> Tensor<'a, T> {
         let mut data = vec![Default::default(); shape.iter().product()];
         for i in 0..data.len() {
@@ -237,7 +256,6 @@ macro_rules! implement_reduce {
                 let op_step = if dim != 0 {
                     self.stride[dim-1]
                 } else { self.data.len() };
-                // rough draft of what could work, gotta think more
                 for i in (0..self.data.len()).step_by(op_step) {
                     res.push($fn_name(&self.data[i..i+op_step]))
                 }
@@ -416,6 +434,25 @@ mod tests {
         let tensor1 = Tensor::new(data1, &shape1);
         assert_eq!(tensor1[vec![1, 2]], 6.0);
     }
+
+    #[test]
+    fn test_transpose() {
+        let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let shape1 = vec![2, 3];
+        let tensor1 = Tensor::new(data1, &shape1);
+        let tensor2 = tensor1.transpose();
+        assert_eq!(tensor2.data, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+
+    #[test]
+    fn test_matrix_mul() {
+        let data1 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let data2 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let shape1 = vec![2, 3];
+        let shape2 = vec![3, 2];
+        let tensor1 = Tensor::new(data1, &shape1);
+        let tensor2 = Tensor::new(data2, &shape2);
+        let tensor3 = tensor1.matmul(&tensor2);
+        assert_eq!(tensor3.data, vec![22.0, 28.0, 49.0, 64.0]);
+    }
 }
-
-

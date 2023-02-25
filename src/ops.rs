@@ -7,6 +7,7 @@ pub enum TensOp {
     Mul,
     Div,
     Sub,
+    MatMul
 }
 
 pub fn sum<T: Copy + Default + AddAssign>(slice: &[T]) -> T {
